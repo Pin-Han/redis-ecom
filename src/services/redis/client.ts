@@ -1,3 +1,4 @@
+import { itemsByViewsKey, itemsKey, itemsViewsKey } from "$services/keys";
 import { createClient, defineScript } from "redis";
 
 const client = createClient({
@@ -17,14 +18,41 @@ const client = createClient({
         return reply;
       },
     }),
+    incrementViews: defineScript({
+      NUMBER_OF_KEYS: 3,
+      SCRIPT: `
+      local itemsViewsKey = KEYS[1]
+      local itemsKey = KEYS[2]
+      local itemsByViewsKey = KEYS[3]
+
+      local itemId = ARGV[1]
+      local userId = ARGV[2]
+
+      local inserted = redis.call('PFADD', itemsViewsKey, userId)
+      if (inserted) {
+        redis.call('HINCRBY', itemsKey, 'views', 1)
+        redis.call('ZINCRBY', itemsByViewsKey, 1, itemId)
+      }
+      return inserted
+      `,
+      transformArguments: (itemId: string, userId: string) => {
+        return [
+          itemsViewsKey(itemId),
+          itemsKey(itemId),
+          itemsByViewsKey(),
+          itemId,
+          userId,
+        ];
+      },
+      transformReply: () => {
+        return null;
+      },
+    }),
   },
 });
 
 client.on("connect", async () => {
   console.log("connected to redis");
-  await client.addOneAndStore("books:count", 1);
-  const result = await client.get("books:count");
-  console.log("this is result", result);
 });
 
 client.on("error", (err) =>
