@@ -1,11 +1,13 @@
 import type { CreateBidAttrs, Bid } from "$services/types";
 import { bidHistoryKey, itemsByPriceKey, itemsKey } from "$services/keys";
-import { client } from "$services/redis";
+import { client, withLock } from "$services/redis";
 import { DateTime } from "luxon";
 import { getItem } from "./items";
 export const createBid = async (attrs: CreateBidAttrs) => {
-  return client.executeIsolated(async (isolatedClient) => {
-    await isolatedClient.watch(itemsKey(attrs.itemId));
+  return withLock(attrs.itemId, async () => {
+    // 1) Fetching the item
+    // 2) Doing validation
+    // 3) Writing some data
 
     const item = await getItem(attrs.itemId);
     if (!item) {
@@ -22,21 +24,25 @@ export const createBid = async (attrs: CreateBidAttrs) => {
       attrs.amount,
       attrs.createdAt.toMillis().toString()
     );
-
-    return isolatedClient
-      .multi()
-      .rPush(bidHistoryKey(attrs.itemId), serialized)
-      .hSet(itemsKey(attrs.itemId), {
+    await Promise.all([
+      client.rPush(bidHistoryKey(attrs.itemId), serialized),
+      client.hSet(itemsKey(attrs.itemId), {
         bids: (item.bids + 1).toString(),
         price: attrs.amount.toString(),
         highestBidUserId: attrs.userId,
-      })
-      .zAdd(itemsByPriceKey(), {
+      }),
+      client.zAdd(itemsByPriceKey(), {
         value: item.id,
         score: attrs.amount,
-      })
-      .exec();
+      }),
+    ]);
   });
+
+  // return client.executeIsolated(async (isolatedClient) => {
+  //   await isolatedClient.watch(itemsKey(attrs.itemId));
+
+  //     .exec();
+  // });
 };
 
 export const getBidHistory = async (
